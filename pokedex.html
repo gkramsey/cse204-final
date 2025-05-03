@@ -1,0 +1,355 @@
+<script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/upscaler"></script>
+<link rel="stylesheet" href="styles/style_pokedex.css" />
+
+<!--api calls-->
+<script type="text/babel">
+    //get by generation, return pokedex numbers
+    async function fetchPokemonByGeneration(generation) {
+        const res = await fetch(`https://pokeapi.co/api/v2/generation/${generation}/`);
+        if (!res.ok) throw new Error('Error fetching Pokemon by generation');
+        const data = await res.json();
+
+        //api is weird, doesn't directly give pokedex, have to parse from url using regex
+        return data.pokemon_species.map(pokemon => {
+            const pokedex = pokemon.url.match(/\/(\d+)\/$/);
+            return pokedex ? pokedex[1] : null;
+        });
+    }
+
+    //get by type, return pokedex numbers
+    async function fetchPokemonByType(type) {
+        const res = await fetch(`https://pokeapi.co/api/v2/type/${type}`);
+        if (!res.ok) throw new Error('Error fetching Pokemon by type');
+        const data = await res.json();
+
+        //same regex method as with generation
+        return data.pokemon.map(p => {
+            const pokedex = p.pokemon.url.match(/\/(\d+)\/$/);
+            return pokedex ? pokedex[1] : null;
+        });
+    }
+
+    //given a pokedex number, fetch all the necessary details
+    async function fetchPokemonDetails(pokedex) {
+        const res = await fetch(`https://pokeapi.co/api/v2/pokemon/${pokedex}`);
+        if (!res.ok) throw new Error('Error fetching Pokemon details');
+        const data = await res.json();
+        return {
+            //parse name to make it readable
+            name: data.name.split('-')
+                .map(pname => pname.charAt(0).toUpperCase() + pname.slice(1))
+                .join(' '),
+            pokedex: data.id,
+            sprite: data.sprites.front_default,
+            //later generations don't have animated sprites, getting the latest generation of animated sprites for each pokemon
+            //if it is a pokemon introduced after animated sprites are available, assign value to null
+            sprite_animated: data.sprites.versions?.["generation-v"]?.["black-white"]?.animated?.front_default,
+            sprite_shiny: data.sprites.front_shiny,
+            //same as before, only get animated shiny sprites when available
+            sprite_animated_shiny: data.sprites.versions?.["generation-v"]?.["black-white"]?.animated?.front_shiny,
+            pokemon_data: {
+                abilities: data.abilities,
+                cry: data.cries.latest,
+                height: data.height,
+                weight: data.weight,
+                types: data.types
+            }
+        };
+    }
+</script>
+
+<!--custom react components-->
+<script type="text/babel">
+    //https://react.dev/reference/react/useRef
+    //used useRef in a number of places here
+    const {useEffect, useState, useRef} = React;
+
+    //react component for type icons
+    function PokemonTypeIcon({type}) {
+        return (
+            <img src={`resources/types/type_${type}.png`} alt={type} className="type-icon" />
+        )
+    }
+
+    //react component for sprites on main poage
+    function PokemonSprite({pokemon, isClicked, onClick}) {
+        return (
+            <div className="sprite-container">
+                {/*funky classname thing here, used for pokeball animation effect.
+                    when open, will trigger close effect on click and vice versa using classes and keyframes in the css*/}
+                <div className={`sprite ${isClicked ? 'open' : 'close'}`} id={`${pokemon.name}-sprite`}>
+                    <img src={pokemon.sprite} alt={pokemon.name} onClick={() => onClick(pokemon.name)} />
+                </div>
+                <p>{pokemon.name}</p>
+                {/*small arrow dropping down from the sprite to the info panel, only shows up when pokemon is clicked*/}
+                {isClicked && <div className="sprite-arrow" />}
+            </div>
+        )
+    }
+
+    //main component for details panel
+    function PokemonDetailsPanel({pokemon}) {
+        //tracks state of shiny pokemon to toggle between showing shiny sprite and regular sprite
+        const [showShiny, setShowShiny] = useState(false);
+        //ref for the audio to keep track of if its playing
+        //keeps pokemon cries from stacking on each other if play is clicked too quickly in succession
+        const audioRef = useRef(null);
+
+        //audio play function
+        function playCall(src) {
+            //if audio is playing, will pause and reset
+            if (audioRef.current) {
+                audioRef.current.pause();
+                audioRef.current.currentTime = 0;
+            }
+
+            //make new audio object and play
+            const call = new Audio(src);
+            audioRef.current = call;
+            call.play();
+        }
+
+        return (
+            <div className="pokemon-details">
+                <div className="pokemon-details-grid">
+                    {/*wrapper for pokemon sprite, bg and shiny toggle*/}
+                    <div className="details-left">
+                        <div className="sprite-wrapper">
+                            <img className="sprite-bg" src="resources/images/dex.png" alt="pokedex-bg" />
+                            {/*again weird source for source, if shiny is toggled, will show either animated or regular depending on whats available*/}
+                            {/*if not, do the same with regular sprite*/}
+                            <img
+                                className="sprite-details"
+                                src={showShiny ? (pokemon.sprite_animated_shiny || pokemon.sprite_shiny) : (pokemon.sprite_animated || pokemon.sprite)}
+                                alt={pokemon.name} />
+                        </div>
+                        {/*button for toggling shiny, has conditional logic to change text based on state*/}
+                        <button className="toggle-shiny" onClick={() => setShowShiny(!showShiny)}>{showShiny ? 'Normal' : 'Shiny'}</button>
+                        {/*if shiny is activated, show sparkle effect*/}
+                        {showShiny && (
+                            <img src="resources/images/shiny.gif" alt="sparkle" className="shiny-gif" key="shiny-gif" />
+                        )}
+                    </div>
+                    {/*other details*/}
+                    <div className="details-right">
+                        <h2>{pokemon.name}</h2>
+                        <h3>Pokedex #{pokemon.pokedex}</h3>
+                        <p>Height: {pokemon.pokemon_data.height}m</p>
+                        <p>Weight: {pokemon.pokemon_data.weight}kg</p>
+                        <div className="type-container">
+                            Types:&nbsp;
+                            <div className="type-images">
+                                {pokemon.pokemon_data.types.map(t => (
+                                    <PokemonTypeIcon key={t.type.name} type={t.type.name} />
+                                ))}
+                            </div>
+                        </div>
+                        <p>Abilities: {
+                            pokemon.pokemon_data.abilities
+                                .map(a => a.ability.name
+                                    .split('-')
+                                    .map(part => part.charAt(0).toUpperCase() + part.slice(1))
+                                    .join(' ')
+                                ).join(', ')
+                        }</p>
+                        <div className="cry-wrapper">
+                            Cry:
+                            <img className="cry-play" src="resources/images/play.png" onClick={() => playCall(pokemon.pokemon_data.cry)} alt="play-button" />
+
+                        </div>
+                    </div>
+                </div>
+            </div>
+        )
+    }
+
+    function TypeFilter({types, selectedTypes, setSelectedTypes}) {
+        const [isOpen, setIsOpen] = useState(false);
+        const dropdownRef = useRef(null);
+
+        function toggle() {
+            setIsOpen(!isOpen)
+        }
+
+        function handleSelection(type) {
+            if (selectedTypes.includes(type)) {
+                setSelectedTypes(selectedTypes.filter((t) => t !== type));
+            } else {
+                setSelectedTypes([...selectedTypes, type]);
+            }
+        }
+
+        useEffect(() => {
+            function handleClickOutside(event) {
+                if (dropdownRef.current && !dropdownRef.current.contains(event.target)) {
+                    setIsOpen(false);
+                }
+            }
+
+            document.addEventListener("mousedown", handleClickOutside);
+            return () => document.removeEventListener("mousedown", handleClickOutside);
+        }, []);
+
+        return (
+            <div className="dropdown" ref={dropdownRef}>
+                <button onClick={toggle} className="dropdown-button">Type</button>
+                {isOpen && (
+                    <div className="dropdown-panel">
+                        {types.map((type) => (
+                            <div key={type} className="check-sel" onClick={() => handleSelection(type)}>
+                                {selectedTypes.includes(type) && (
+                                    <img src="resources/images/check.png" className="checkbox-icon" alt="checkbox" />
+                                )}
+                                {type.charAt(0).toUpperCase() + type.slice(1)}
+                            </div>
+                        ))}
+                    </div>
+                )}
+            </div>
+        )
+    }
+
+    function GenFilter({gens, selectedGens, setSelectedGens}) {
+        const [isOpen, setIsOpen] = useState(false);
+        const dropdownRef = useRef(null);
+
+        function toggle() {
+            setIsOpen(!isOpen)
+        }
+
+        function handleSelection(gen) {
+            if (selectedGens.includes(gen)) {
+                setSelectedGens(selectedGens.filter((g) => g !== gen));
+            } else {
+                setSelectedGens([...selectedGens, gen]);
+            }
+        }
+
+        useEffect(() => {
+            function handleClickOutside(event) {
+                if (dropdownRef.current && !dropdownRef.current.contains(event.target)) {
+                    setIsOpen(false);
+                }
+            }
+
+            document.addEventListener("mousedown", handleClickOutside);
+            return () => document.removeEventListener("mousedown", handleClickOutside);
+        }, []);
+
+        return (
+            <div className="dropdown" ref={dropdownRef}>
+                <button onClick={toggle} className="dropdown-button">Generation</button>
+                {isOpen && (
+                    <div className="dropdown-panel">
+                        {gens.map((gen) => (
+                            <div key={gen} className="check-sel" onClick={() => handleSelection(gen)}>
+                                {selectedGens.includes(gen) && (
+                                    <img
+                                        src="resources/images/check.png" className="checkbox-icon" alt="checkbox" />
+                                )}
+                                Gen {gen}
+                            </div>
+                        ))}
+                    </div>
+                )}
+            </div>
+        )
+    }
+</script>
+
+<!--main app render-->
+<script type="text/babel">
+    function MyApp() {
+        const {useEffect, useState} = React;
+
+        const types = ['bug', 'dark', 'dragon', 'electric', 'fairy', 'fighting', 'fire', 'flying', 'ghost',
+            'grass', 'ground', 'ice', 'normal', 'poison', 'psychic', 'rock', 'steel', 'water']
+        const gens = [1, 2, 3, 4, 5, 6, 7, 8, 9]
+
+        const [pokemonSprites, setPokemonSprites] = useState([]);
+        const [pokemonClick, setPokemonClick] = useState(null);
+        const [selectedGens, setSelectedGens] = useState([1]);
+        const [selectedTypes, setSelectedTypes] = useState(types);
+
+        useEffect(() => {
+            async function loadPokemon() {
+                try {
+                    //show nothing if no gen is selected
+                    if (selectedGens.length === 0) {
+                        setPokemonSprites([]);
+                        return;
+                    }
+
+                    //get pokedex ids by generation
+                    const pokedex_nums_gen = (
+                        await Promise.all(selectedGens.map((gen) => fetchPokemonByGeneration(gen)))
+                    ).flat();
+
+                    //get details
+                    const pokemon_details = await Promise.all(pokedex_nums_gen.map(pokedex_num => fetchPokemonDetails(pokedex_num)));
+
+                    const filtered_details = pokemon_details.filter(pokemon =>
+                        pokemon.pokemon_data.types.every(t => selectedTypes.includes(t.type.name))
+                    );
+
+
+                    const sorted_details = filtered_details.sort((a, b) => a.pokedex - b.pokedex);
+                    setPokemonSprites(sorted_details);
+                } catch (error) {
+                    console.error("Error loading Pokemon details: ", error);
+                }
+            }
+
+            loadPokemon();
+        }, [selectedGens, selectedTypes]);
+
+        function toggleOpen(name) {
+            setPokemonClick(pokemonClick === name ? null : name);
+        }
+
+        return (
+            <>
+                <header className="pokemon-header">
+                    <h1>Pokébase</h1>
+                </header>
+                <div className="filter-wrapper">
+                    <GenFilter gens={gens} selectedGens={selectedGens} setSelectedGens={setSelectedGens} />
+                    <TypeFilter types={types} selectedTypes={selectedTypes} setSelectedTypes={setSelectedTypes} />
+                </div>
+                <div className="list-wrapper" style={{display: selectedGens.length === 0 ? 'none' : 'block'}}>
+                    <div id="pokemon-list">
+                        {pokemonSprites.map((pokemon, index) => {
+                            const isLastInRow = (index + 1) % 4 === 0 || index === pokemonSprites.length - 1;
+                            const isClicked = pokemonClick === pokemon.name;
+                            const rowStartIndex = Math.floor(index / 4) * 4;
+                            const isRowWithClicked = pokemonSprites
+                                .slice(rowStartIndex, rowStartIndex + 4)
+                                .some(p => p.name === pokemonClick);
+
+                            return (
+                                <>
+                                    <PokemonSprite pokemon={pokemon} isClicked={isClicked} onClick={toggleOpen} />
+                                    {isLastInRow && isRowWithClicked && (
+                                        <PokemonDetailsPanel pokemon={pokemonSprites.find(p => p.name === pokemonClick)} />
+                                    )}
+                                </>
+                            );
+                        })}
+                    </div>
+                </div>
+                <footer className="pokemon-footer">
+                    Special Thanks to <a href="https://pokeapi.co/">PokéAPI</a>
+                </footer>
+            </>
+        );
+    }
+
+    const container = document.querySelector('#root')
+    const root = ReactDOM.createRoot(container)
+    root.render(<MyApp />)
+</script>
+
+<div id="root"></div>
